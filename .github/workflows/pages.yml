@@ -1,0 +1,57 @@
+# Deploy the built wallpaper to GitHub Pages.
+#
+# Pages is served from the `dist/` artifact rather than from a branch, so what is
+# published is exactly what `npm run build` produced and nothing else can drift in
+# from a stray commit.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Also a manual trigger: the first run of this workflow cannot succeed, because
+  # Pages is not configured to build from Actions until the workflow exists. So the
+  # bootstrap is push → configure Pages → dispatch this by hand.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. A cancelled in-flight deploy leaves Pages pointing at
+# an artifact that no longer exists.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # `build` is `tsc --noEmit && vite build`, so a type error fails the deploy
+      # rather than shipping a broken bundle.
+      - run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

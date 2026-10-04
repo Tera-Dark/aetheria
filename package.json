@@ -1,0 +1,26 @@
+{
+  "name": "aetheria",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AETHERIA · generative living wallpaper — code, time, light, depth",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "shoot": "node scripts/shoot.mjs",
+    "seam": "node scripts/shoot.mjs --seam"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0",
+    "typescript": "5.9.3",
+    "vite": "7.1.9"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}

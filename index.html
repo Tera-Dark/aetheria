@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Inline so there is no request to make, and therefore no 404 in the
+         capture log to mistake for a real problem. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23070809'/%3E%3Ccircle cx='16' cy='13' r='6' fill='%23d8dde6'/%3E%3Cpath d='M0 24h32v8H0z' fill='%23161c26'/%3E%3C/svg%3E"
+    />
+    <title>AETHERIA · Generative Living Wallpaper</title>
+    <style>
+      /*
+       * The interface is not the product. It exists to be used and then to
+       * disappear: no panels, no chrome, no visible scrollbars. Colour is
+       * reserved entirely for the artwork.
+       */
+      :root {
+        --text: rgba(255, 255, 255, 0.86);
+        --text-dim: rgba(255, 255, 255, 0.42);
+        --text-faint: rgba(255, 255, 255, 0.26);
+        --ui-bg: rgba(10, 10, 12, 0.72);
+        --ui-border: rgba(255, 255, 255, 0.1);
+        --ease: cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+        color: var(--text);
+        font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          'Noto Sans SC', system-ui, sans-serif;
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #stage {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        /* The canvas is the artwork. It should never be selected or dragged. */
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+
+      /* Everything below fades together when idle. */
+      .hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 1;
+        transition: opacity 900ms var(--ease);
+      }
+      body[data-idle='true'] .hud { opacity: 0; }
+      body[data-idle='true'] { cursor: none; }
+
+      /* ---------------- title, bottom-left ---------------- */
+      .plate {
+        position: absolute;
+        left: 28px;
+        bottom: 26px;
+        display: flex;
+        align-items: flex-end;
+        gap: 14px;
+      }
+      .plate h1 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+      }
+      .plate .note {
+        font-size: 12px;
+        color: var(--text-dim);
+        margin-top: 2px;
+      }
+      .plate .mark {
+        font-size: 10px;
+        letter-spacing: 0.34em;
+        color: var(--text-faint);
+        text-transform: uppercase;
+        margin-bottom: 3px;
+      }
+
+      /* ---------------- meta, bottom-right ---------------- */
+      .meta {
+        position: absolute;
+        right: 28px;
+        bottom: 26px;
+        text-align: right;
+        font-size: 11px;
+        line-height: 1.75;
+        color: var(--text-faint);
+        font-variant-numeric: tabular-nums;
+      }
+      .meta b { color: var(--text-dim); font-weight: 400; }
+
+      /* The loop readout is the one piece of instrumentation worth showing,
+         because it is how you verify §6: watch it climb to 100% and return. */
+      .loopbar {
+        position: absolute;
+        right: 28px;
+        bottom: 74px;
+        width: 128px;
+        height: 2px;
+        background: rgba(255, 255, 255, 0.12);
+        border-radius: 1px;
+        overflow: hidden;
+      }
+      .loopbar i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: rgba(255, 255, 255, 0.5);
+      }
+
+      /* ---------------- hints, top-right ---------------- */
+      .hints {
+        position: absolute;
+        top: 22px;
+        right: 28px;
+        display: flex;
+        gap: 6px;
+        pointer-events: auto;
+      }
+      .key {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        border: 1px solid var(--ui-border);
+        border-radius: 6px;
+        background: var(--ui-bg);
+        backdrop-filter: blur(10px);
+        font-size: 11px;
+        color: var(--text-dim);
+        cursor: pointer;
+        transition: color 140ms var(--ease), border-color 140ms var(--ease);
+      }
+      .key:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.22); }
+      .key kbd {
+        font-family: inherit;
+        font-size: 10px;
+        padding: 1px 4px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--text-dim);
+      }
+
+      /* ---------------- scene rail, left ---------------- */
+      .rail {
+        position: absolute;
+        left: 24px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        pointer-events: auto;
+      }
+      .rail button {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 10px;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--text-faint);
+        font-size: 12px;
+        cursor: pointer;
+        transition: color 160ms var(--ease), background 160ms var(--ease);
+        text-align: left;
+      }
+      .rail button:hover { color: var(--text-dim); background: rgba(255, 255, 255, 0.04); }
+      .rail button[aria-current='true'] { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+      .rail .dot {
+        width: 5px; height: 5px;
+        border-radius: 50%;
+        background: currentColor;
+        flex: none;
+        opacity: 0.5;
+      }
+      .rail button[aria-current='true'] .dot { opacity: 1; }
+
+      /* ---------------- boot / fatal ---------------- */
+      .fatal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 40px;
+        text-align: center;
+        background: #06070a;
+      }
+      body[data-fatal='true'] .fatal { display: grid; }
+      .fatal h2 { font-size: 16px; font-weight: 500; margin: 0 0 10px; }
+      .fatal pre {
+        margin: 0;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        line-height: 1.7;
+        color: var(--text-dim);
+        white-space: pre-wrap;
+        max-width: 70ch;
+      }
+
+      @media (max-width: 700px) {
+        .rail, .loopbar { display: none; }
+        .plate { left: 18px; bottom: 18px; }
+        .meta { right: 18px; bottom: 18px; }
+      }
+    </style>
+  </head>
+  <body data-idle="true">
+    <canvas id="stage"></canvas>
+
+    <div class="hud">
+      <nav class="rail" id="rail" aria-label="作品"></nav>
+
+      <div class="plate">
+        <div>
+          <div class="mark">Aetheria</div>
+          <h1 id="title">—</h1>
+          <div class="note" id="note"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="loopbar" title="循环相位：0% → 100% 后回到 0%"><i id="loopfill"></i></div>
+        <div class="meta">
+          <div><b id="fps">—</b> fps · <span id="quality">—</span></div>
+          <div id="period">—</div>
+        </div>
+      </div>
+
+      <div class="hints">
+        <button class="key" data-act="next"><kbd>Space</kbd> 下一件</button>
+        <button class="key" data-act="quality"><kbd>Q</kbd> 画质</button>
+      </div>
+    </div>
+
+    <div class="fatal">
+      <div>
+        <h2>无法启动</h2>
+        <pre id="fatalmsg"></pre>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
