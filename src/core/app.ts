@@ -15,9 +15,10 @@
 import {
   Color,
   NoToneMapping,
+  PerspectiveCamera,
   SRGBColorSpace,
   WebGLRenderer,
-  type PerspectiveCamera,
+  WebGLRenderTarget,
 } from 'three';
 
 import { CameraRig } from './camera';
@@ -31,11 +32,17 @@ import { QualityGovernor, QUALITY } from './performance';
 import type { QualityLevel } from './performance';
 import { approach, clamp01, wrapPhase } from './loop';
 
+/** Resolve after the browser has had a chance to paint. */
+const nextFrame = (): Promise<void> =>
+  new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
 export interface AppStats {
   fps: number;
   quality: string;
   /** True when the governor is pinned rather than adapting. */
   locked: boolean;
+  /** Frames rendered since start. */
+  frames: number;
   scene: string;
   /** Loop phase of the last rendered frame, in [0,1). */
   phase: number;
@@ -98,6 +105,18 @@ export class WallpaperApp {
 
   private gradeOverride: Partial<GradeSpec> | null = null;
 
+  /** Frames rendered since start. */
+  private frames = 0;
+  private resolveReady!: () => void;
+  /**
+   * Resolves once the first frame has been rendered.
+   *
+   * Boot is a sequence with real waits in it — shader compilation is synchronous
+   * and there is no way around that — so the launcher needs to know when the
+   * expensive part is over rather than guessing with a timer.
+   */
+  readonly ready: Promise<void>;
+
   // Pointer state. The only genuinely persistent values in the app, and both
   // are eased toward their target so nothing snaps.
   private pointerTarget = { x: 0, y: 0 };
@@ -113,6 +132,9 @@ export class WallpaperApp {
   constructor(private readonly options: AppOptions) {
     this.scenes = options.scenes;
     this.bus = options.audio ?? nullAudioBus;
+    this.ready = new Promise<void>((resolve) => {
+      this.resolveReady = resolve;
+    });
 
     this.renderer = new WebGLRenderer({
       canvas: options.canvas,
@@ -140,9 +162,52 @@ export class WallpaperApp {
     this.bindInput(options.canvas);
   }
 
-  start(): void {
+    start(): void {
     this.load(0, true);
     this.stage.start((elapsed, dt, rawDt) => this.frame(elapsed, dt, rawDt));
+  }
+
+  /**
+   * Compile the other scenes' programs, yielding a frame between each.
+   *
+   * Switching to a scene compiles its shaders during the first frame of the fade,
+   * which on a modest GPU is a multi-second freeze *in the middle of a
+   * transition* — the worst possible moment, because the user has just asked for
+   * something and gets no feedback at all. Paying it here moves the cost behind
+   * the loading screen, where it is at least labelled.
+   *
+   * Yields between scenes rather than doing them in one go, so the launcher's
+   * progress bar can actually paint instead of jumping from 0 to 100.
+   */
+  async prewarm(
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<void> {
+    const others = this.scenes.map((_, i) => i).filter((i) => i !== this.sceneIndex);
+    let done = 0;
+    for (const index of others) {
+      await nextFrame();
+      const definition = this.scenes[index];
+      if (!definition) continue;
+      const probe = definition.create(this.ctx);
+      const camera =
+        this.rigOf(probe)?.camera ?? new PerspectiveCamera(50, 1, 0.1, 100);
+      // Draw one frame into a single pixel. That is the cheapest way to make the
+      // driver compile and link the programs and resolve every uniform location,
+      // and it goes through three's ordinary path — `renderer.compile()` avoids
+      // the draw but leaves the renderer querying programs it never bound, which
+      // produced a stream of GL_INVALID_VALUE warnings on every load.
+      const target = new WebGLRenderTarget(1, 1);
+      this.renderer.setRenderTarget(target);
+      this.renderer.render(probe.three, camera);
+      this.renderer.setRenderTarget(null);
+      target.dispose();
+      probe.dispose();
+      done++;
+      onProgress?.(done, others.length);
+    }
+    // One more frame, so the final progress update is on screen before the
+    // overlay is told to fade.
+    await nextFrame();
   }
 
   stop(): void {
@@ -289,7 +354,15 @@ export class WallpaperApp {
    * ---------------------------------------------------------------- */
 
   private frame(elapsed: number, dt: number, rawDt: number): void {
+    this.frames++;
     this.governor.sample(dt, elapsed);
+
+    if (this.frames === 1) {
+      // The first frame includes shader compilation and is not representative of
+      // anything. Leaving it in the window would have the governor drop quality
+      // for the rest of the session over a cost the user will never pay again.
+      this.governor.reset();
+    }
 
     // Quality level changed → re-measure the drawing buffer and re-tune the
     // scene. Both are one-off costs, so a governor that settles after a few
@@ -394,6 +467,8 @@ export class WallpaperApp {
     }
 
     this.post.render(base.three, baseCamera, phase, fade);
+
+    if (this.frames === 1) this.resolveReady();
   }
 
   /* ---------------------------------------------------------------- *
@@ -469,6 +544,7 @@ get isPinned(): boolean {
       fps: this.governor.fps,
       quality: this.governor.current.name,
       locked: this.governor.lockedLevel !== null,
+      frames: this.frames,
       scene: this.scenes[this.sceneIndex]?.title ?? '',
       phase: this.renderedPhase,
       level: QUALITY.indexOf(this.governor.current),

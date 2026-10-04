@@ -37,6 +37,14 @@ export interface GovernorOptions {
   maxLevel?: number;
   /** Never go below this. */
   minLevel?: number;
+  /**
+   * Where to start. Defaults to the cheapest level, and that default is the whole
+   * point: a wallpaper that opens at its best settings renders its first frame
+   * with every volumetric sample at full resolution, which on a modest GPU is
+   * several seconds of a frozen tab before anything appears. Starting at the floor
+   * and climbing costs a second of slightly softer shafts and removes the stall.
+   */
+  startLevel?: number;
   /** Frame time to stay under, ms. */
   targetMs?: number;
   /** Sample window. */
@@ -59,8 +67,11 @@ export class QualityGovernor {
     this.maxLevel = Math.min(options.maxLevel ?? QUALITY.length - 1, QUALITY.length - 1);
     this.minLevel = Math.max(0, options.minLevel ?? 0);
     this.targetMs = options.targetMs ?? 1000 / 55;
-    this.windowMs = options.windowMs ?? 2500;
-    this.level = this.maxLevel;
+    // Short enough that a fast machine reaches full quality in a few seconds
+    // rather than a few tens of seconds. Nobody wants to wait a minute for the
+    // picture to finish improving.
+    this.windowMs = options.windowMs ?? 1600;
+    this.level = Math.min(this.maxLevel, Math.max(this.minLevel, options.startLevel ?? 0));
   }
 
   get current(): QualityLevel {
@@ -95,8 +106,13 @@ export class QualityGovernor {
     if (this.locked !== null) return;
 
     const span = now - this.lastSwitch;
-    const enoughTime = span > this.windowMs / 1000;
-    if (!enoughTime) return;
+    // Shorten the window while there is headroom left to climb, so a fast machine
+    // reaches full quality in a couple of seconds instead of six. The wait before
+    // *dropping* stays long, because dropping too eagerly is the mistake that
+    // actually shows up as pumping.
+    const headroom = this.level / Math.max(1, this.maxLevel - this.minLevel);
+    const settle = (this.windowMs * (1 - 0.5 * headroom)) / 1000;
+    if (span < settle) return;
 
     // Dead band: only act on a clear miss, so quality does not hunt.
     if (p95 > this.targetMs * 1.18) {
@@ -109,11 +125,9 @@ export class QualityGovernor {
     } else if (p95 < this.targetMs * 0.82 && this.level < this.maxLevel) {
       // Raising is deliberately slower than lowering: it is the more visible
       // direction, and it must not outrun the measurement.
-      if (span > this.windowMs / 1000) {
-        this.level = Math.min(this.maxLevel, this.level + 1);
-        this.samples.length = 0;
-        this.lastSwitch = now;
-      }
+      this.level = Math.min(this.maxLevel, this.level + 1);
+      this.samples.length = 0;
+      this.lastSwitch = now;
     }
   }
 

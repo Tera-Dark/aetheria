@@ -188,6 +188,64 @@
       }
       .rail button[aria-current='true'] .dot { opacity: 1; }
 
+      /* ---------------- boot ----------------
+         Compiling a volumetric shader takes seconds on a modest GPU, and it
+         happens synchronously. Without this the page is a black rectangle that
+         does not respond, which reads as broken rather than as loading — so the
+         wait is stated, and it is stated with the real steps rather than an
+         animated lie. */
+      .boot {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 18px;
+        padding: 40px;
+        text-align: center;
+        /* Matches the darkest water in the scenes, so the handover is a fade
+           rather than a flash. */
+        background: #04070a;
+        opacity: 1;
+        transition: opacity 700ms var(--ease);
+      }
+      body[data-loading='false'] .boot {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .boot-mark {
+        font-size: 10px;
+        letter-spacing: 0.42em;
+        text-transform: uppercase;
+        color: var(--text-faint);
+      }
+      .boot-title {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--text);
+        min-height: 1.4em;
+      }
+      .boot-bar {
+        width: 168px;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.12);
+        overflow: hidden;
+      }
+      .boot-bar i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: rgba(255, 255, 255, 0.55);
+        transition: width 320ms var(--ease);
+      }
+      .boot-hint {
+        font-size: 11px;
+        line-height: 1.8;
+        color: var(--text-faint);
+        max-width: 34ch;
+      }
+
       /* ---------------- boot / fatal ---------------- */
       .fatal {
         position: fixed;
@@ -217,8 +275,17 @@
       }
     </style>
   </head>
-  <body data-idle="true">
+  <body data-idle="true" data-loading="true">
     <canvas id="stage"></canvas>
+
+    <div class="boot" id="boot">
+      <div class="boot-mark">Aetheria</div>
+      <div class="boot-title" id="bootstep">正在启动</div>
+      <div class="boot-bar"><i id="bootfill"></i></div>
+      <div class="boot-hint">
+        首次打开需要编译体积光着色器，通常几秒；之后会走浏览器缓存。
+      </div>
+    </div>
 
     <div class="hud">
       <nav class="rail" id="rail" aria-label="作品"></nav>

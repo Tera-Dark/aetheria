@@ -13,6 +13,7 @@ import { abyssalBloomDefinition } from './scenes/abyssal-bloom';
 
 const fatal = (error: unknown): void => {
   document.body.dataset.fatal = 'true';
+  document.body.dataset.loading = 'false';
   const el = document.getElementById('fatalmsg');
   if (el) el.textContent = error instanceof Error ? `${error.message}\n\n${error.stack ?? ''}` : String(error);
   console.error(error);
@@ -21,7 +22,49 @@ const fatal = (error: unknown): void => {
 /** `?capture=1` turns on the pixel readback the seam test needs. */
 const CAPTURE = new URLSearchParams(location.search).has('capture');
 
-const boot = (): void => {
+/**
+ * Wall-clock time from module execution to the loading overlay being dismissed.
+ * Measured rather than estimated, because "it feels slow" is not a number anyone
+ * can argue with or improve on.
+ */
+const BOOT_STARTED = performance.now();
+let bootMs = 0;
+
+/** Resolve after the browser has had a chance to paint. */
+const nextFrame = (): Promise<void> =>
+  new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+/**
+ * Advance the loading readout.
+ *
+ * The steps are the real ones, in the order they happen. A percentage that does
+ * not correspond to work being done is worse than no percentage, because it
+ * teaches the reader to distrust the one time the number stalls.
+ */
+const makeProgress = () => {
+  const step = document.getElementById('bootstep');
+  const fill = document.getElementById('bootfill');
+  const set = (fraction: number, label: string): void => {
+    if (fill) fill.style.width = `${Math.round(fraction * 100)}%`;
+    if (step) step.textContent = label;
+  };
+  return {
+    set,
+    done: () => {
+      document.body.dataset.loading = 'false';
+    },
+  };
+};
+
+const boot = async (): Promise<void> => {
+  const progress = makeProgress();
+  // Two frames, not one. The first rAF callback runs before the first paint, so
+  // yielding only once still leaves the overlay unpainted when the blocking work
+  // starts — which is the exact failure this is meant to prevent.
+  progress.set(0.08, '正在启动');
+  await nextFrame();
+  await nextFrame();
+
   const canvas = document.getElementById('stage');
   if (!(canvas instanceof HTMLCanvasElement)) throw new Error('#stage canvas missing');
 
@@ -38,6 +81,9 @@ const boot = (): void => {
   const quality = document.getElementById('quality');
   const period = document.getElementById('period');
   const loopFill = document.getElementById('loopfill');
+
+  progress.set(0.2, '正在分配渲染管线');
+  await nextFrame();
 
   const app = new WallpaperApp({
     canvas,
@@ -58,7 +104,31 @@ const boot = (): void => {
     return b;
   });
 
+  // Before the first frame, deliberately: the capture tool has to be able to see
+  // the app *during* boot, because how long boot takes is now a measurement
+  // rather than an impression.
+  installCaptureHook(app, canvas);
+
+  progress.set(0.32, '正在编译着色器');
   app.start();
+
+  // The first frame compiles the first scene's shaders and draws it. This is the
+  // long synchronous stall, and it is the reason the overlay exists.
+  await app.ready;
+  progress.set(0.6, '正在预热其余作品');
+
+  // Compile the rest now, behind the overlay, rather than as a freeze in the
+  // middle of a transition later.
+  await app.prewarm((done, total) => {
+    progress.set(0.6 + 0.35 * (done / total), `正在预热其余作品 ${done}/${total}`);
+  });
+
+  progress.set(1, '');
+  // One frame with the bar at 100% on screen, then the fade.
+  await nextFrame();
+  progress.done();
+  document.getElementById('boot')?.setAttribute('hidden', '');
+  bootMs = performance.now() - BOOT_STARTED;
 
   // The HUD reflects the *current* scene, so track which one is on screen rather
   // than assuming index 0.
@@ -129,10 +199,7 @@ const boot = (): void => {
     app.next();
     wake();
   });
-
-  installCaptureHook(app, canvas);
 };
-
 /**
  * The inspection surface `scripts/shoot.mjs` drives.
  *
@@ -165,6 +232,17 @@ const installCaptureHook = (app: WallpaperApp, canvas: HTMLCanvasElement): void 
     grade: (patch: Record<string, number> | null) =>
       app.setGradeOverride(patch as never),
     scenes: () => app.sceneTitles,
+    /**
+     * Boot timing and state. `loading` is the honest answer to "is it stuck?" —
+     * the alternative is the user deciding, from a black rectangle, whether to
+     * close the tab.
+     */
+    boot: () => ({
+      loading: document.body.dataset.loading === 'true',
+      step: document.getElementById('bootstep')?.textContent ?? '',
+      ms: Math.round(bootMs),
+      frames: app.stats.frames,
+    }),
     /** Store the current framebuffer as the reference for `diff`. */
     snap: () => {
       reference = sample();
@@ -218,8 +296,4 @@ const installCaptureHook = (app: WallpaperApp, canvas: HTMLCanvasElement): void 
   };
 };
 
-try {
-  boot();
-} catch (error) {
-  fatal(error);
-}
+void boot().catch(fatal);

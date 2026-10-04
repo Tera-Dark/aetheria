@@ -99,7 +99,15 @@ const HUES: readonly [number, number, number][] = [
   [0.62, 1.0, 0.78],
 ];
 
-const VOLUMETRIC_LUT: readonly number[] = [10, 16, 26, 40];
+/**
+ * Volumetric steps per quality level.
+ *
+ * God rays are a low-frequency phenomenon. Past about two dozen samples the extra
+ * steps buy dithering noise rather than detail, and each one costs a full noise
+ * evaluation per pixel — so this table is the frame budget, and its top is not
+ * negotiable on the grounds of "more looks better".
+ */
+const VOLUMETRIC_LUT: readonly number[] = [8, 12, 18, 26];
 
 const vec3 = (c: { r: number; g: number; b: number }): Vector3 =>
   new Vector3(c.r, c.g, c.b);

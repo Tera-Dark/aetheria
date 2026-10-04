@@ -34,7 +34,10 @@ const CHROME = flag(
   'chrome',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
 );
-/** Freeze the quality governor so two runs are comparable. */
+/**
+ * Freeze the quality governor so two runs are comparable. Negative means "leave it
+ * alone", which is how the adaptive ramp gets observed.
+ */
 const QUALITY = Number(flag('quality', '3'));
 const SCENE = flag('scene', null);
 const PHASES = (flag('phases', '0,0.5') ?? '')
@@ -218,10 +221,8 @@ const evaluate = async (expression) => {
 console.log(`Loading ${URL_BASE} …`);
 await send('Page.navigate', { url: URL_BASE }, sessionId);
 
-// Give the scene time to compile shaders and settle into the loop. SwiftShader
-// compiles and runs a volumetric shader slowly, so this is not generous enough
-// to be called a guess — it is just what it takes.
-await sleep(9000);
+// The poll below owns the wait. Nothing here assumes how long the work takes.
+await sleep(400);
 
 const fatal = await evaluate(
   "document.body.dataset.fatal === 'true' ? document.getElementById('fatalmsg').textContent : ''",
@@ -233,17 +234,73 @@ if (fatal) {
   process.exit(3);
 }
 
-const hookReady = await evaluate('typeof window.__aetheria === "object"');
+const hookReady = await step('hook', () =>
+  // The module script has to parse and run before the hook exists, and on a cold
+  // cache that is not instant. Poll rather than assume: the old fixed sleep was
+  // short enough to miss it and long enough to be wrong everywhere else.
+  withTimeout(
+    (async () => {
+      for (let i = 0; i < 200; i++) {
+        if (await evaluate('typeof window.__aetheria === "object"')) return true;
+        await sleep(150);
+      }
+      return false;
+    })(),
+    'hook',
+  ),
+);
 if (!hookReady) {
   console.error('window.__aetheria missing — load the page with ?capture=1');
   cleanup();
   process.exit(4);
 }
 
-// Freeze everything that would otherwise make two runs incomparable.
-await step(`lock quality ${QUALITY}`, () =>
-  evaluate(`window.__aetheria.lockQuality(${QUALITY})`),
-);
+/**
+ * Wait for the loading overlay to retire, rather than sleeping a guessed interval.
+ *
+ * The guessed interval was the second thing making this script lie: 9s was enough
+ * on a fast machine and not enough on a slow one, so a slow machine produced a
+ * screenshot of the loading screen and a report that said nothing was wrong.
+ */
+const BOOT_TIMEOUT_MS = Number(flag('boot-timeout', '120000'));
+const bootStart = Date.now();
+let boot = null;
+for (;;) {
+  boot = await evaluate('JSON.stringify(window.__aetheria.boot())');
+  const state = JSON.parse(boot);
+  if (state.loading === false && state.frames > 2) {
+    console.log(
+      `booted in ${state.ms}ms (waited ${Date.now() - bootStart}ms) — ${state.step || 'ready'}`,
+    );
+    break;
+  }
+  if (Date.now() - bootStart > BOOT_TIMEOUT_MS) {
+    console.error(`still loading after ${BOOT_TIMEOUT_MS}ms: ${boot}`);
+    cleanup();
+    process.exit(5);
+  }
+  await sleep(250);
+}
+
+// Freeze everything that would otherwise make two runs incomparable — unless the
+// caller asked to watch the governor adapt.
+if (QUALITY >= 0) {
+  await step(`lock quality ${QUALITY}`, () =>
+    evaluate(`window.__aetheria.lockQuality(${QUALITY})`),
+  );
+} else {
+  await step('quality adaptive', () => evaluate('window.__aetheria.lockQuality(null)'));
+  await step('watch ramp', async () => {
+    const seen = [];
+    for (let i = 0; i < 14; i++) {
+      const s = JSON.parse(await evaluate('JSON.stringify(window.__aetheria.stats())'));
+      const row = `L${s.level} ${s.quality} p50=${s.p50.toFixed(0)} p95=${s.p95.toFixed(0)}`;
+      if (seen[seen.length - 1] !== row) seen.push(row);
+      await sleep(1000);
+    }
+    console.log(`    ramp: ${seen.join(' | ')}`);
+  });
+}
 if (has('seam')) await evaluate('window.__aetheria.grade({ grain: 0 })');
 await sleep(2500);
 
