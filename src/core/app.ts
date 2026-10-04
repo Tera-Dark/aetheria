@@ -22,6 +22,7 @@ import {
 } from 'three';
 
 import { CameraRig } from './camera';
+import { acquireGL, describeGPU, WebGLUnavailableError } from './gl';
 import { nullAudioBus } from './scene';
 import type { AudioBus, FrameInfo, SceneDefinition, SceneInstance } from './scene';
 import { Stage, measureViewport } from './renderer';
@@ -74,6 +75,8 @@ export class WallpaperApp {
   private readonly post: PostChain;
   private readonly governor = new QualityGovernor();
   private readonly bus: AudioBus;
+  /** GPU string, captured at startup. Present in bug reports. */
+  readonly gpu: string;
 
   private readonly scenes: readonly SceneDefinition[];
   private instance: SceneInstance | null = null;
@@ -136,15 +139,26 @@ export class WallpaperApp {
       this.resolveReady = resolve;
     });
 
+    // Create the context before three does. See core/gl.ts: the failure mode this
+    // guards against is indistinguishable from "the page is blank" unless we take
+    // the context ourselves and keep the driver's explanation.
+    const gl = acquireGL(options.canvas, options.capture ?? false);
+    if (!gl.ok) throw new WebGLUnavailableError(gl);
+
     this.renderer = new WebGLRenderer({
       canvas: options.canvas,
-      antialias: false, // the post chain resolves edges; MSAA on an HDR target is not worth it
+      context: gl.context,
       alpha: false,
-      powerPreference: 'high-performance',
+      powerPreference: 'default',
       stencil: false,
       depth: true,
-      preserveDrawingBuffer: options.capture ?? false,
     });
+    if (gl.relaxed) {
+      // Not fatal, but it means the driver refused something and the result may
+      // differ from what the scene asked for. Worth having in the log.
+      console.warn(`[aetheria] context attributes relaxed to "${gl.relaxed}"`);
+    }
+    this.gpu = describeGPU(gl.context);
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = NoToneMapping; // tone mapping happens in the composite pass
     this.renderer.setClearColor(new Color(0, 0, 0), 1);

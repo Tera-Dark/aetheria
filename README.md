@@ -53,6 +53,34 @@ L0 minimal → L1 low → L2 medium → L3 high
 `window.__aetheria.boot()` 会如实回答"卡住了吗"：加载是否结束、当前步骤、耗时、
 已渲染帧数。
 
+## 如果页面报错
+
+作品需要 **WebGL 2**。拿不到上下文时，页面会给出**诊断**而不是一段压缩后的堆栈——
+堆栈既指不出你的机器，也说不出原因，更不给出下一步。
+
+失败面板包含：一句人话的结论、**驱动自己返回的原话**（这一行往往就是答案）、以及最常见
+的三种原因。控制台里的 `[aetheria] WebGL unavailable` 带完整结构。
+
+三个最常见的原因：
+
+1. 浏览器设置里「使用硬件加速」被关闭 —— `chrome://settings/system`
+2. 显卡驱动在浏览器的阻止名单里 —— `chrome://gpu` 会写明
+3. 驱动过旧，或独显处于被禁用 / 切换中的状态
+
+`src/core/gl.ts` 负责这件事，它有两个决定值得记下来：
+
+**不请求 `powerPreference: 'high-performance'`。** 这个提示会要求浏览器使用独立显卡，
+而在混合显卡笔记本上它是**上下文创建失败的已知原因**——独显被屏蔽、低功耗状态、
+或正在切换时，请求会直接失败而不是回退。对这个项目它也没有任何收益：调速器本来就
+在决定要push 多狠，"更快的适配器"能买到的东西，降低帧时同样能买到。
+
+**上下文由我们自己创建，再交给 three。** 逐级尝试两套属性（完整 / 精简），全部失败时
+通过 `webglcontextcreationerror` 事件拿到驱动的解释。`getContext` 返回 null 本身不携带
+任何信息，那一行字是唯一的线索。
+
+回归测试：`node scripts/shoot.mjs --block-webgl` 用禁用 WebGL 的 Chrome 启动，
+打印诊断面板——否则这段代码就是"看起来对但从未被执行"的代码。
+
 
 ---
 
@@ -144,6 +172,7 @@ node scripts/shoot.mjs --scene 1 --phases 0,0.25,0.5,0.75
 node scripts/shoot.mjs --transition        # 交叉淡入的中间态
 node scripts/shoot.mjs --scene 1 --seam --tolerance 0.5   # 更严的门槛
 node scripts/shoot.mjs --quality -1                       # 不锁画质，打印自适应爬升
+node scripts/shoot.mjs --block-webgl                     # 打印 WebGL 失败诊断面板
 ```
 
 `?capture=1` 会打开 `preserveDrawingBuffer`，这是像素回读的前提。它带来每帧一次

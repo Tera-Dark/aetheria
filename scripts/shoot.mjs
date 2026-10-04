@@ -56,6 +56,14 @@ const SEAM_TOLERANCE = Number(flag('tolerance', '1.0'));
 const COMMAND_TIMEOUT_MS = Number(flag('timeout', '60000'));
 /** Seconds into a scene change to grab the frame. The fade is 1.8s. */
 const TRANSITION_AT = Number(flag('at', '0.5'));
+/**
+ * Launch Chrome with WebGL refused, to exercise the failure path.
+ *
+ * The diagnostic panel is the only thing standing between a visitor and a minified
+ * stack trace, and it is exactly the kind of code that looks right and is never
+ * exercised. This makes it reachable.
+ */
+const BLOCK_WEBGL = has('block-webgl');
 
 await mkdir(OUT, { recursive: true });
 
@@ -80,6 +88,7 @@ const chrome = spawn(
     '--disable-gpu-sandbox',
     '--no-first-run',
     `--user-data-dir=${path.join(process.env.TEMP ?? '.', `aetheria-shoot-${PORT}`)}`,
+    ...(BLOCK_WEBGL ? ['--disable-webgl', '--disable-3d-apis'] : []),
     'about:blank',
   ],
   { stdio: 'ignore' },
@@ -227,13 +236,20 @@ await send('Page.navigate', { url: URL_BASE }, sessionId);
 const BOOT_TIMEOUT_MS = Number(flag('boot-timeout', '120000'));
 const bootStart = Date.now();
 const bootProbe =
-  "JSON.stringify({loading: document.body.dataset.loading === 'true', step: (document.getElementById('bootstep')||{}).textContent || '', ms: (window.__aetheria && window.__aetheria.boot().ms) || 0})";
+  "JSON.stringify({loading: document.body.dataset.loading === 'true', step: (document.getElementById('bootstep')||{}).textContent || '', ms: (window.__aetheria && window.__aetheria.boot().ms) || 0, fatal: document.body.dataset.fatal === 'true'})";
 const trace = [];
 let booted = false;
+let fatalPanel = '';
 for (;;) {
   const state = JSON.parse(await evaluate(bootProbe));
   const label = state.loading ? state.step : 'ready';
   if (trace[trace.length - 1] !== label) trace.push(label);
+  if (state.fatal) {
+    fatalPanel = await evaluate(
+      "((document.getElementById('fataltitle')||{}).textContent || '') + '\\n' + ((document.getElementById('fatalmsg')||{}).innerText || '')",
+    );
+    break;
+  }
   if (!state.loading && state.ms > 0) {
     booted = true;
     console.log(`booted in ${state.ms}ms (waited ${Date.now() - bootStart}ms)`);
@@ -246,6 +262,16 @@ for (;;) {
     process.exit(5);
   }
   await sleep(80);
+}
+
+if (fatalPanel) {
+  console.log('--- failure panel ---');
+  console.log(fatalPanel);
+  console.log('--- page log ---');
+  for (const line of logs.slice(0, 8)) console.log('  ' + line);
+  ws.close();
+  cleanup();
+  process.exit(BLOCK_WEBGL ? 0 : 3);
 }
 
 const hookReady = await step('hook', () =>

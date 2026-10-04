@@ -257,7 +257,7 @@
         background: #06070a;
       }
       body[data-fatal='true'] .fatal { display: grid; }
-      .fatal h2 { font-size: 16px; font-weight: 500; margin: 0 0 10px; }
+      .fatal h2 { font-size: 16px; font-weight: 500; margin: 0 0 14px; }
       .fatal pre {
         margin: 0;
         font-family: ui-monospace, monospace;
@@ -267,6 +267,45 @@
         white-space: pre-wrap;
         max-width: 70ch;
       }
+      .fatal-reason {
+        margin: 0 0 12px;
+        font-size: 13px;
+        line-height: 1.8;
+        color: var(--text);
+        max-width: 56ch;
+      }
+      .fatal-driver {
+        margin: 0 0 16px;
+        font-size: 11px;
+        line-height: 1.7;
+        color: var(--text-faint);
+        max-width: 62ch;
+      }
+      .fatal-driver code {
+        font-family: ui-monospace, monospace;
+        color: var(--text-dim);
+      }
+      .fatal-advice {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.9;
+        color: var(--text-dim);
+        text-align: left;
+        max-width: 56ch;
+      }
+      .fatal-advice ol {
+        margin: 6px 0 10px;
+        padding-left: 20px;
+      }
+      .fatal-advice li { margin: 3px 0; }
+      .fatal details {
+        margin-top: 20px;
+        text-align: left;
+        color: var(--text-faint);
+        font-size: 11px;
+      }
+      .fatal summary { cursor: pointer; }
+      .fatal details pre { margin-top: 10px; }
 
       @media (max-width: 700px) {
         .rail, .loopbar { display: none; }
@@ -314,8 +353,8 @@
 
     <div class="fatal">
       <div>
-        <h2>无法启动</h2>
-        <pre id="fatalmsg"></pre>
+        <h2 id="fataltitle">无法启动</h2>
+        <div id="fatalmsg"></div>
       </div>
     </div>
 

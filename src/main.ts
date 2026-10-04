@@ -6,18 +6,65 @@
  */
 
 import { WallpaperApp } from './core/app';
+import { WebGLUnavailableError } from './core/gl';
 import { listScenes, registerScene } from './core/scene';
 import type { SceneDefinition } from './core/scene';
 import { moonlitValeDefinition } from './scenes/moonlit-vale';
 import { abyssalBloomDefinition } from './scenes/abyssal-bloom';
 
+/**
+ * Failure panel.
+ *
+ * A minified stack trace is the worst possible thing to show someone whose browser
+ * would not open a graphics context: it identifies neither the machine, nor the
+ * reason, nor what to try next. When the cause is known it gets said in words, with
+ * the driver's own message, and the trace is kept behind a disclosure for the bug
+ * report.
+ */
 const fatal = (error: unknown): void => {
   document.body.dataset.fatal = 'true';
   document.body.dataset.loading = 'false';
-  const el = document.getElementById('fatalmsg');
-  if (el) el.textContent = error instanceof Error ? `${error.message}\n\n${error.stack ?? ''}` : String(error);
+
+  const panel = document.getElementById('fatalmsg');
+  if (panel) {
+    const gl = error instanceof WebGLUnavailableError ? error.detail : null;
+    const title = document.getElementById('fataltitle');
+    if (title) {
+      title.textContent = gl ? '此浏览器未能提供 WebGL 2' : '无法启动';
+    }
+
+    if (gl) {
+      const advice =
+        '这与作品无关，是浏览器拒绝了图形上下文。最常见的三种原因：' +
+        '<ol>' +
+        '<li>浏览器设置里「使用硬件加速」被关闭（chrome://settings/system）</li>' +
+        '<li>显卡驱动在浏览器的阻止名单里（chrome://gpu 会写明）</li>' +
+        '<li>显卡驱动过旧，或独显处于被禁用 / 切换中的状态</li>' +
+        '</ol>' +
+        '本页只需要 WebGL 2，不下载任何素材，也不调用网络。';
+      panel.innerHTML = [
+        `<p class="fatal-reason">${gl.reason}</p>`,
+        gl.statusMessage
+          ? `<p class="fatal-driver">驱动返回：<code>${escapeHtml(gl.statusMessage)}</code></p>`
+          : '',
+        `<p class="fatal-advice">${advice}</p>`,
+        `<details><summary>技术细节</summary><pre>${escapeHtml(
+          `尝试的属性：${gl.tried}\n驱动消息：${gl.statusMessage || '(无)'}`,
+        )}</pre></details>`,
+      ].join('');
+      console.error('[aetheria] WebGL unavailable', gl);
+      return;
+    }
+
+    panel.textContent = error instanceof Error ? `${error.message}\n\n${error.stack ?? ''}` : String(error);
+  }
   console.error(error);
 };
+
+const escapeHtml = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) =>
+    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;',
+  );
 
 /** `?capture=1` turns on the pixel readback the seam test needs. */
 const CAPTURE = new URLSearchParams(location.search).has('capture');
