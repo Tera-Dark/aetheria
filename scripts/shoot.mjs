@@ -217,27 +217,38 @@ const evaluate = async (expression) => {
   }
   return result.value;
 };
-
 console.log(`Loading ${URL_BASE} …`);
 await send('Page.navigate', { url: URL_BASE }, sessionId);
 
-// The poll below owns the wait. Nothing here assumes how long the work takes.
-await sleep(400);
-
-const fatal = await evaluate(
-  "document.body.dataset.fatal === 'true' ? document.getElementById('fatalmsg').textContent : ''",
-);
-if (fatal) {
-  console.error('The app failed to start:\n' + fatal);
-  dumpLogs();
-  cleanup();
-  process.exit(3);
+// Watch the boot from the very first moment, and read the DOM rather than the
+// app's debug hook. The hook does not exist until the module has been fetched and
+// parsed — which is most of the wait on a cold cache — so polling it would begin
+// observing only after the interesting part.
+const BOOT_TIMEOUT_MS = Number(flag('boot-timeout', '120000'));
+const bootStart = Date.now();
+const bootProbe =
+  "JSON.stringify({loading: document.body.dataset.loading === 'true', step: (document.getElementById('bootstep')||{}).textContent || '', ms: (window.__aetheria && window.__aetheria.boot().ms) || 0})";
+const trace = [];
+let booted = false;
+for (;;) {
+  const state = JSON.parse(await evaluate(bootProbe));
+  const label = state.loading ? state.step : 'ready';
+  if (trace[trace.length - 1] !== label) trace.push(label);
+  if (!state.loading && state.ms > 0) {
+    booted = true;
+    console.log(`booted in ${state.ms}ms (waited ${Date.now() - bootStart}ms)`);
+    console.log(`  steps: ${trace.join(' → ')}`);
+    break;
+  }
+  if (Date.now() - bootStart > BOOT_TIMEOUT_MS) {
+    console.error(`still loading after ${BOOT_TIMEOUT_MS}ms: ${JSON.stringify(state)}`);
+    cleanup();
+    process.exit(5);
+  }
+  await sleep(80);
 }
 
 const hookReady = await step('hook', () =>
-  // The module script has to parse and run before the hook exists, and on a cold
-  // cache that is not instant. Poll rather than assume: the old fixed sleep was
-  // short enough to miss it and long enough to be wrong everywhere else.
   withTimeout(
     (async () => {
       for (let i = 0; i < 200; i++) {
@@ -249,37 +260,13 @@ const hookReady = await step('hook', () =>
     'hook',
   ),
 );
-if (!hookReady) {
-  console.error('window.__aetheria missing — load the page with ?capture=1');
+
+if (!hookReady || !booted) {
+  console.error(
+    `window.__aetheria missing — load the page with ?capture=1 (booted=${booted})`,
+  );
   cleanup();
   process.exit(4);
-}
-
-/**
- * Wait for the loading overlay to retire, rather than sleeping a guessed interval.
- *
- * The guessed interval was the second thing making this script lie: 9s was enough
- * on a fast machine and not enough on a slow one, so a slow machine produced a
- * screenshot of the loading screen and a report that said nothing was wrong.
- */
-const BOOT_TIMEOUT_MS = Number(flag('boot-timeout', '120000'));
-const bootStart = Date.now();
-let boot = null;
-for (;;) {
-  boot = await evaluate('JSON.stringify(window.__aetheria.boot())');
-  const state = JSON.parse(boot);
-  if (state.loading === false && state.frames > 2) {
-    console.log(
-      `booted in ${state.ms}ms (waited ${Date.now() - bootStart}ms) — ${state.step || 'ready'}`,
-    );
-    break;
-  }
-  if (Date.now() - bootStart > BOOT_TIMEOUT_MS) {
-    console.error(`still loading after ${BOOT_TIMEOUT_MS}ms: ${boot}`);
-    cleanup();
-    process.exit(5);
-  }
-  await sleep(250);
 }
 
 // Freeze everything that would otherwise make two runs incomparable — unless the

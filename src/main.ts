@@ -61,7 +61,7 @@ const boot = async (): Promise<void> => {
   // Two frames, not one. The first rAF callback runs before the first paint, so
   // yielding only once still leaves the overlay unpainted when the blocking work
   // starts — which is the exact failure this is meant to prevent.
-  progress.set(0.08, '正在启动');
+  progress.set(0.08, '正在启动引擎');
   await nextFrame();
   await nextFrame();
 
@@ -123,7 +123,7 @@ const boot = async (): Promise<void> => {
     progress.set(0.6 + 0.35 * (done / total), `正在预热其余作品 ${done}/${total}`);
   });
 
-  progress.set(1, '');
+  progress.set(1, '准备就绪');
   // One frame with the bar at 100% on screen, then the fade.
   await nextFrame();
   progress.done();
